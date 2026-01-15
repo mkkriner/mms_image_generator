@@ -31,6 +31,15 @@ overlay_y = st.sidebar.number_input("Overlay Y Position", value=1060, help="Vert
 overlay_max_w = st.sidebar.number_input("Overlay Max Width", value=225, help="Maximum width the overlay can be")
 overlay_max_h = st.sidebar.number_input("Overlay Max Height", value=175, help="Maximum height the overlay can be")
 
+# Whitespace options
+st.sidebar.header("Whitespace Options")
+trim_whitespace = st.sidebar.checkbox("Trim whitespace from overlays", value=True, 
+                                      help="Remove transparent borders from overlay images")
+center_overlay = st.sidebar.checkbox("Center overlay in bounding box", value=True,
+                                     help="Center the overlay within the specified dimensions")
+show_whitespace_analysis = st.sidebar.checkbox("Show whitespace analysis", value=False,
+                                               help="Display whitespace percentage for debugging")
+
 st.sidebar.header("Text Configuration")
 font_size = st.sidebar.slider("Font Size", 10, 200, 54)
 text_x = st.sidebar.number_input("Text X Position", value=650, help="Horizontal position of the text")
@@ -42,6 +51,70 @@ text_align = st.sidebar.selectbox("Text Alignment", ["left", "center", "right"],
 text_color = st.sidebar.color_picker("Text Color", "#2B4396")
 text_color_rgb = tuple(int(text_color.lstrip('#')[i:i+2], 16) for i in (0, 2, 4))
 
+def get_bounding_box(img):
+    """Find the bounding box of non-transparent pixels in an RGBA image"""
+    if img.mode != 'RGBA':
+        img = img.convert('RGBA')
+    
+    # Get alpha channel
+    alpha = img.split()[-1]
+    bbox = alpha.getbbox()  # returns (left, top, right, bottom) or None
+    return bbox
+
+def trim_whitespace_from_image(img):
+    """Remove transparent/whitespace borders from image"""
+    bbox = get_bounding_box(img)
+    if bbox:
+        return img.crop(bbox)
+    return img
+
+def analyze_whitespace_in_region(img, x, y, w, h):
+    """
+    Analyze how much whitespace is in a specific region.
+    Returns percentage of transparent/white pixels (0-100)
+    """
+    # Ensure coordinates are within image bounds
+    img_w, img_h = img.size
+    x = max(0, min(x, img_w))
+    y = max(0, min(y, img_h))
+    w = min(w, img_w - x)
+    h = min(h, img_h - y)
+    
+    if w <= 0 or h <= 0:
+        return 0
+    
+    region = img.crop((x, y, x + w, y + h))
+    
+    if region.mode != 'RGBA':
+        region = region.convert('RGBA')
+    
+    pixels = region.getdata()
+    transparent_count = 0
+    total_pixels = len(pixels)
+    
+    if total_pixels == 0:
+        return 0
+    
+    for pixel in pixels:
+        # Check if pixel is transparent (alpha < 10) or white-ish
+        if len(pixel) == 4:  # RGBA
+            r, g, b, a = pixel
+            if a < 10 or (r > 240 and g > 240 and b > 240):
+                transparent_count += 1
+        elif len(pixel) == 3:  # RGB
+            r, g, b = pixel
+            if r > 240 and g > 240 and b > 240:
+                transparent_count += 1
+    
+    return (transparent_count / total_pixels) * 100
+
+def center_in_box(img, box_w, box_h):
+    """Calculate offset to center image within a box"""
+    img_w, img_h = img.size
+    offset_x = (box_w - img_w) // 2
+    offset_y = (box_h - img_h) // 2
+    return offset_x, offset_y
+
 def fit_into(img, max_w, max_h):
     w, h = img.size
     scale = min(max_w / w, max_h / h)
@@ -51,17 +124,48 @@ def generate_image(template, overlay, custom_text, font):
     canvas = template.copy()
     draw = ImageDraw.Draw(canvas)
     
+    whitespace_info = None
+    
     # Paste overlay
     if overlay:
-        overlay_resized = fit_into(overlay, overlay_max_w, overlay_max_h)
-        canvas.alpha_composite(overlay_resized, (overlay_x, overlay_y))
+        processed_overlay = overlay.copy()
+        
+        # Trim whitespace if enabled
+        if trim_whitespace:
+            processed_overlay = trim_whitespace_from_image(processed_overlay)
+        
+        # Resize to fit
+        overlay_resized = fit_into(processed_overlay, overlay_max_w, overlay_max_h)
+        
+        # Calculate position (centered or not)
+        if center_overlay:
+            offset_x, offset_y = center_in_box(overlay_resized, overlay_max_w, overlay_max_h)
+            paste_x = overlay_x + offset_x
+            paste_y = overlay_y + offset_y
+        else:
+            paste_x = overlay_x
+            paste_y = overlay_y
+        
+        canvas.alpha_composite(overlay_resized, (paste_x, paste_y))
+        
+        # Analyze whitespace if requested
+        if show_whitespace_analysis:
+            whitespace_pct = analyze_whitespace_in_region(
+                canvas, overlay_x, overlay_y, overlay_max_w, overlay_max_h
+            )
+            whitespace_info = {
+                'whitespace_pct': whitespace_pct,
+                'original_size': overlay.size,
+                'trimmed_size': processed_overlay.size if trim_whitespace else overlay.size,
+                'final_size': overlay_resized.size
+            }
     
     # Draw text
     if custom_text:
         draw.multiline_text((text_x, text_y), custom_text, font=font, 
                           fill=text_color_rgb, spacing=text_spacing, align=text_align)
     
-    return canvas
+    return canvas, whitespace_info
 
 # Main app logic
 if template_file and font_file:
@@ -107,13 +211,25 @@ if template_file and font_file:
             
             # Generate button
             if st.button("🎨 Generate Preview", type="primary"):
-                preview_img = generate_image(template, selected_overlay, custom_text, font)
+                preview_img, ws_info = generate_image(template, selected_overlay, custom_text, font)
                 st.session_state['preview_img'] = preview_img
+                st.session_state['ws_info'] = ws_info
         
         with col2:
             # Display preview
             if 'preview_img' in st.session_state:
                 st.image(st.session_state['preview_img'], caption="Preview", use_container_width=True)
+                
+                # Display whitespace analysis
+                if show_whitespace_analysis and 'ws_info' in st.session_state and st.session_state['ws_info']:
+                    ws_info = st.session_state['ws_info']
+                    st.info(f"""
+                    **Whitespace Analysis:**
+                    - Whitespace in overlay area: {ws_info['whitespace_pct']:.1f}%
+                    - Original size: {ws_info['original_size']}
+                    - Trimmed size: {ws_info['trimmed_size']}
+                    - Final size: {ws_info['final_size']}
+                    """)
                 
                 # Download button
                 buf = io.BytesIO()
@@ -173,7 +289,7 @@ image3 | Just one line | overlay2.png""",
                     custom_text = '\n'.join(text_parts)
                     
                     # Generate image
-                    img = generate_image(template, overlay, custom_text, font)
+                    img, _ = generate_image(template, overlay, custom_text, font)
                     
                     # Convert to bytes
                     buf = io.BytesIO()
@@ -235,9 +351,15 @@ else:
     3. Generate all images at once
     4. Download as a ZIP file
     
+    ### Whitespace Features:
+    - **Trim whitespace**: Automatically removes transparent borders from overlay images
+    - **Center overlay**: Centers the trimmed overlay within the bounding box
+    - **Whitespace analysis**: Shows statistics about overlay positioning (for debugging)
+    
     ### Tips:
     - Use the configuration sliders to position text and overlays
     - Text supports multiple lines (use line breaks in the text area)
     - Overlay images are automatically resized to fit within max dimensions
     - In batch mode, overlay reference is optional
+    - Enable "Trim whitespace" for consistent positioning of irregularly-shaped overlays
     """)
