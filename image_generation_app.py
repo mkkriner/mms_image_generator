@@ -33,6 +33,10 @@ overlay_max_h = st.sidebar.number_input("Overlay Max Height", value=175, help="M
 
 # Whitespace options
 st.sidebar.header("Whitespace Options")
+convert_white_to_transparent = st.sidebar.checkbox("Convert white to transparent", value=False,
+                                                    help="Convert white/near-white pixels to transparent before trimming")
+white_threshold = st.sidebar.slider("White threshold", 200, 255, 240,
+                                   help="Pixels with RGB values above this are considered white")
 trim_whitespace = st.sidebar.checkbox("Trim whitespace from overlays", value=True, 
                                       help="Remove transparent borders from overlay images")
 center_overlay = st.sidebar.checkbox("Center overlay in bounding box", value=True,
@@ -50,6 +54,23 @@ text_align = st.sidebar.selectbox("Text Alignment", ["left", "center", "right"],
 # Color picker
 text_color = st.sidebar.color_picker("Text Color", "#2B4396")
 text_color_rgb = tuple(int(text_color.lstrip('#')[i:i+2], 16) for i in (0, 2, 4))
+
+def convert_white_to_transparent_func(img, threshold=240):
+    """Convert white/near-white pixels to transparent"""
+    img = img.convert("RGBA")
+    data = img.getdata()
+    
+    new_data = []
+    for item in data:
+        # If pixel is white or near-white (all RGB values above threshold)
+        if item[0] > threshold and item[1] > threshold and item[2] > threshold:
+            # Make it transparent (alpha = 0)
+            new_data.append((255, 255, 255, 0))
+        else:
+            new_data.append(item)
+    
+    img.putdata(new_data)
+    return img
 
 def get_bounding_box(img):
     """Find the bounding box of non-transparent pixels in an RGBA image"""
@@ -129,6 +150,10 @@ def generate_image(template, overlay, custom_text, font):
     # Paste overlay
     if overlay:
         processed_overlay = overlay.copy()
+        
+        # Convert white to transparent if enabled
+        if convert_white_to_transparent:
+            processed_overlay = convert_white_to_transparent_func(processed_overlay, white_threshold)
         
         # Trim whitespace if enabled
         if trim_whitespace:
@@ -352,6 +377,8 @@ else:
     4. Download as a ZIP file
     
     ### Whitespace Features:
+    - **Convert white to transparent**: Automatically converts white backgrounds to transparent
+    - **White threshold**: Adjust which shade of white gets converted (200-255)
     - **Trim whitespace**: Automatically removes transparent borders from overlay images
     - **Center overlay**: Centers the trimmed overlay within the bounding box
     - **Whitespace analysis**: Shows statistics about overlay positioning (for debugging)
