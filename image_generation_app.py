@@ -94,7 +94,16 @@ if template_file and font_file:
         for overlay_file in overlay_files:
             name = overlay_file.name
             overlays_dict[name] = Image.open(overlay_file).convert("RGBA")
-        st.success(f"✅ Loaded template, font, and {len(overlays_dict)} overlay images")
+    
+    # Add any processed overlays from session state
+    if 'saved_overlays' not in st.session_state:
+        st.session_state['saved_overlays'] = {}
+    
+    overlays_dict.update(st.session_state['saved_overlays'])
+    
+    if overlay_files or st.session_state['saved_overlays']:
+        total_overlays = len(overlays_dict)
+        st.success(f"✅ Loaded template, font, and {total_overlays} overlay images")
     else:
         st.success(f"✅ Loaded template and font")
     
@@ -171,8 +180,10 @@ if template_file and font_file:
                     
                     # Option to use in generator
                     if st.button("✅ Use This in Generator", key="use_processed"):
-                        overlays_dict[f"processed_{bg_overlay_choice}"] = st.session_state['processed_overlay']
-                        st.success(f"Added as 'processed_{bg_overlay_choice}' to overlay list!")
+                        processed_name = f"processed_{bg_overlay_choice}"
+                        st.session_state['saved_overlays'][processed_name] = st.session_state['processed_overlay']
+                        st.success(f"✅ Added as '{processed_name}' to overlay list! Switch to the generator tabs to use it.")
+                        st.rerun()
                 else:
                     st.info("Click 'Remove Background' to see the result")
         
