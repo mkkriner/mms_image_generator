@@ -102,10 +102,12 @@ if template_file and font_file:
     tab1, tab2, tab3 = st.tabs(["Single Image Generator", "Batch Generator", "Background Remover"])
     
     with tab3:
-        st.header("Background Remover")
+        st.header("🖼️ Background Remover")
         st.write("Remove a specific color from your overlay images to make them transparent.")
         
-        if overlays_dict:
+        if not overlays_dict:
+            st.info("Upload overlay images in the sidebar first to use the background remover.")
+        else:
             bg_overlay_choice = st.selectbox("Select image to process:", 
                                            list(overlays_dict.keys()),
                                            key="bg_removal_select")
@@ -173,9 +175,7 @@ if template_file and font_file:
                         st.success(f"Added as 'processed_{bg_overlay_choice}' to overlay list!")
                 else:
                     st.info("Click 'Remove Background' to see the result")
-        else:
-            st.info("Upload overlay images in the sidebar first to use the background remover.")
-    
+        
     with tab1:
         st.header("Single Image Generator")
         
