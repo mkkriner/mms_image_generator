@@ -5,8 +5,6 @@ Created on Mon Dec 15 14:17:17 2025
 
 @author: mikekriner
 """
-
-
 import streamlit as st
 from PIL import Image, ImageDraw, ImageFont
 import io
@@ -47,6 +45,25 @@ def fit_into(img, max_w, max_h):
     scale = min(max_w / w, max_h / h)
     return img.resize((int(w * scale), int(h * scale)), Image.LANCZOS)
 
+def make_color_transparent(img, target_color, threshold=50):
+    """Make a specific color transparent in an image"""
+    img = img.convert("RGBA")
+    datas = img.getdata()
+    new_data = []
+    
+    for item in datas:
+        # Calculate Euclidean distance between pixel color and target color
+        diff = sum((item[i] - target_color[i])**2 for i in range(3))**0.5
+        
+        # If color is within threshold, make transparent
+        if diff < threshold:
+            new_data.append((item[0], item[1], item[2], 0))  # alpha = 0
+        else:
+            new_data.append(item)
+    
+    img.putdata(new_data)
+    return img
+
 def generate_image(template, overlay, custom_text, font):
     canvas = template.copy()
     draw = ImageDraw.Draw(canvas)
@@ -82,7 +99,82 @@ if template_file and font_file:
         st.success(f"✅ Loaded template and font")
     
     # Tab interface
-    tab1, tab2 = st.tabs(["Single Image Generator", "Batch Generator"])
+    tab1, tab2, tab3 = st.tabs(["Single Image Generator", "Batch Generator", "Background Remover"])
+    
+    with tab3:
+        st.header("Background Remover")
+        st.write("Remove a specific color from your overlay images to make them transparent.")
+        
+        if overlays_dict:
+            bg_overlay_choice = st.selectbox("Select image to process:", 
+                                           list(overlays_dict.keys()),
+                                           key="bg_removal_select")
+            
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                st.subheader("Settings")
+                
+                # Color picker for background color
+                bg_color = st.color_picker("Select background color to remove", "#FFFFFF",
+                                          help="Pick the color you want to make transparent")
+                bg_color_rgb = tuple(int(bg_color.lstrip('#')[i:i+2], 16) for i in (0, 2, 4))
+                
+                # Threshold slider
+                threshold = st.slider("Threshold", 0, 255, 50,
+                                    help="Higher values remove more similar colors. Lower values are more precise.")
+                
+                # Process button
+                if st.button("🎨 Remove Background", type="primary", key="remove_bg_btn"):
+                    original_img = overlays_dict[bg_overlay_choice]
+                    processed_img = make_color_transparent(original_img.copy(), bg_color_rgb, threshold)
+                    st.session_state['processed_overlay'] = processed_img
+                    st.session_state['processed_overlay_name'] = bg_overlay_choice
+            
+            with col2:
+                st.subheader("Preview")
+                
+                # Show before/after
+                if 'processed_overlay' in st.session_state:
+                    # Create a checkerboard background to show transparency
+                    checker_size = 20
+                    w, h = st.session_state['processed_overlay'].size
+                    checker = Image.new('RGB', (w, h), (200, 200, 200))
+                    draw = ImageDraw.Draw(checker)
+                    for y in range(0, h, checker_size):
+                        for x in range(0, w, checker_size):
+                            if (x // checker_size + y // checker_size) % 2:
+                                draw.rectangle([x, y, x + checker_size, y + checker_size], 
+                                             fill=(255, 255, 255))
+                    
+                    # Composite the processed image over checker
+                    checker.paste(st.session_state['processed_overlay'], (0, 0), 
+                                st.session_state['processed_overlay'])
+                    
+                    st.image(checker, caption="Processed (transparent areas show checkered)", 
+                           use_container_width=True)
+                    
+                    # Download button
+                    buf = io.BytesIO()
+                    st.session_state['processed_overlay'].save(buf, format='PNG')
+                    buf.seek(0)
+                    
+                    st.download_button(
+                        label="⬇️ Download Processed Image",
+                        data=buf.getvalue(),
+                        file_name=f"transparent_{st.session_state['processed_overlay_name']}",
+                        mime="image/png",
+                        key="download_processed"
+                    )
+                    
+                    # Option to use in generator
+                    if st.button("✅ Use This in Generator", key="use_processed"):
+                        overlays_dict[f"processed_{bg_overlay_choice}"] = st.session_state['processed_overlay']
+                        st.success(f"Added as 'processed_{bg_overlay_choice}' to overlay list!")
+                else:
+                    st.info("Click 'Remove Background' to see the result")
+        else:
+            st.info("Upload overlay images in the sidebar first to use the background remover.")
     
     with tab1:
         st.header("Single Image Generator")
