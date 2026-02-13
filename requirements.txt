@@ -1,2 +1,7 @@
 streamlit
 pillow
+geopandas
+matplotlib
+fiona
+pyproj
+shapely
