@@ -348,8 +348,16 @@ if template_file and font_file:
                                     county_map_resized = fit_into(county_map_img, overlay_max_w, overlay_max_h)
                                     canvas.alpha_composite(county_map_resized, (overlay_x, overlay_y))
                                     
+                                    # Determine subdivision type based on state
+                                    if selected_state == 'AK':
+                                        subdivision = 'borough'
+                                    elif selected_state == 'LA':
+                                        subdivision = 'parish'
+                                    else:
+                                        subdivision = 'county'
+                                    
                                     # Draw text
-                                    text = f"{county_name}\nresidents needed!"
+                                    text = f"{county_name} {subdivision}\nresidents needed!"
                                     draw.multiline_text((text_x, text_y), text, font=font, 
                                                       fill=text_color_rgb, spacing=text_spacing, align=text_align)
                                     
