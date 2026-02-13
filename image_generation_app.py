@@ -373,7 +373,7 @@ if template_file and font_file:
                             
                             st.session_state['county_images'] = county_images
                             st.session_state['county_state_name'] = state_name
-                            st.session_state['county_output_mode'] = output_mode
+                            st.session_state['county_mode_saved'] = output_mode
                             st.success(f"✅ Generated {len(county_images)} county {'images' if use_template else 'maps'} for {state_name}!")
                     
                     except Exception as e:
@@ -385,7 +385,7 @@ if template_file and font_file:
             if 'county_images' in st.session_state and st.session_state['county_images']:
                 county_images = st.session_state['county_images']
                 state_name = st.session_state['county_state_name']
-                output_mode = st.session_state.get('county_output_mode', 'Maps Only')
+                output_mode = st.session_state.get('county_mode_saved', 'Maps Only')
                 
                 # Preview first county
                 first_image = list(county_images.values())[0]
