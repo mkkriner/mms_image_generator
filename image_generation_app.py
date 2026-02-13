@@ -346,8 +346,8 @@ if template_file and font_file:
                                     
                                     # Apply special scaling for Alaska (it's geographically huge)
                                     if selected_state == 'AK':
-                                        # Alaska gets 2x the normal max dimensions
-                                        county_map_resized = fit_into(county_map_img, overlay_max_w * 4, overlay_max_h * 4)
+                                        # Alaska gets 6x the normal max dimensions
+                                        county_map_resized = fit_into(county_map_img, overlay_max_w * 6, overlay_max_h * 6)
                                     else:
                                         county_map_resized = fit_into(county_map_img, overlay_max_w, overlay_max_h)
                                     
