@@ -340,6 +340,7 @@ if template_file and font_file:
             if 'county_images' in st.session_state and st.session_state['county_images']:
                 county_images = st.session_state['county_images']
                 state_name = st.session_state['county_state_name']
+                output_mode = st.session_state.get('county_output_mode', 'Maps Only')
                 
                 # Preview first county
                 first_image = list(county_images.values())[0]
@@ -355,10 +356,11 @@ if template_file and font_file:
                 zip_buf.seek(0)
                 
                 # Download ZIP
+                label_text = f"⬇️ Download All {len(county_images)} County {'Images' if output_mode == 'Complete Images (with template & text)' else 'Maps'} (ZIP)"
                 st.download_button(
-                    label=f"⬇️ Download All {len(county_images)} County Maps (ZIP)",
+                    label=label_text,
                     data=zip_buf.getvalue(),
-                    file_name=f"{state_name}_county_maps.zip",
+                    file_name=f"{state_name}_county_{'images' if output_mode == 'Complete Images (with template & text)' else 'maps'}.zip",
                     mime="application/zip",
                     key="download_county_zip"
                 )
