@@ -9,6 +9,10 @@ import streamlit as st
 from PIL import Image, ImageDraw, ImageFont
 import io
 import zipfile
+import geopandas as gpd
+import matplotlib.pyplot as plt
+import matplotlib
+matplotlib.use('Agg')  # Use non-interactive backend
 
 # Page config
 st.set_page_config(page_title="Custom Image Generator", layout="wide")
@@ -108,7 +112,7 @@ if template_file and font_file:
         st.success(f"✅ Loaded template and font")
     
     # Tab interface
-    tab1, tab2, tab3 = st.tabs(["Single Image Generator", "Batch Generator", "Background Remover"])
+    tab1, tab2, tab3, tab4 = st.tabs(["Single Image Generator", "Batch Generator", "Background Remover", "County Map Generator"])
     
     with tab3:
         st.header("🖼️ Background Remover")
@@ -186,6 +190,205 @@ if template_file and font_file:
                         st.rerun()
                 else:
                     st.info("Click 'Remove Background' to see the result")
+        
+    with tab4:
+        st.header("🗺️ County Map Generator")
+        st.write("Generate individual county maps for US states with highlighted counties.")
+        
+        # State selection
+        us_states = {
+            'AL': 'Alabama', 'AK': 'Alaska', 'AZ': 'Arizona', 'AR': 'Arkansas',
+            'CA': 'California', 'CO': 'Colorado', 'CT': 'Connecticut', 'DE': 'Delaware',
+            'FL': 'Florida', 'GA': 'Georgia', 'HI': 'Hawaii', 'ID': 'Idaho',
+            'IL': 'Illinois', 'IN': 'Indiana', 'IA': 'Iowa', 'KS': 'Kansas',
+            'KY': 'Kentucky', 'LA': 'Louisiana', 'ME': 'Maine', 'MD': 'Maryland',
+            'MA': 'Massachusetts', 'MI': 'Michigan', 'MN': 'Minnesota', 'MS': 'Mississippi',
+            'MO': 'Missouri', 'MT': 'Montana', 'NE': 'Nebraska', 'NV': 'Nevada',
+            'NH': 'New Hampshire', 'NJ': 'New Jersey', 'NM': 'New Mexico', 'NY': 'New York',
+            'NC': 'North Carolina', 'ND': 'North Dakota', 'OH': 'Ohio', 'OK': 'Oklahoma',
+            'OR': 'Oregon', 'PA': 'Pennsylvania', 'RI': 'Rhode Island', 'SC': 'South Carolina',
+            'SD': 'South Dakota', 'TN': 'Tennessee', 'TX': 'Texas', 'UT': 'Utah',
+            'VT': 'Vermont', 'VA': 'Virginia', 'WA': 'Washington', 'WV': 'West Virginia',
+            'WI': 'Wisconsin', 'WY': 'Wyoming', 'DC': 'Washington DC'
+        }
+        
+        col1, col2 = st.columns([1, 1])
+        
+        with col1:
+            st.subheader("Settings")
+            
+            # State selection
+            selected_state = st.selectbox(
+                "Select State:",
+                options=list(us_states.keys()),
+                format_func=lambda x: f"{x} - {us_states[x]}"
+            )
+            
+            # Check if local file exists
+            local_shapefile_path = 'cb_2020_us_county_20m.zip'
+            
+            import os
+            use_local_file = os.path.exists(local_shapefile_path)
+            
+            if use_local_file:
+                st.success("✅ Using local shapefile from Google Drive")
+                county_shapefile_source = "local"
+            else:
+                # Upload county shapefile
+                county_shapefile = st.file_uploader(
+                    "Upload County Shapefile (ZIP)",
+                    type=['zip'],
+                    help="Upload a ZIP file containing county shapefiles (e.g., cb_2020_us_county_20m.zip from Census Bureau)"
+                )
+                county_shapefile_source = "upload"
+            
+            # Color settings
+            highlight_color = st.color_picker("Highlight Color (selected county)", "#FFA500")
+            base_color = st.color_picker("Base Color (other counties)", "#354eb0")
+            
+            # County outline color toggle
+            outline_style = st.radio(
+                "County Outline Color:",
+                options=["Black", "Blue (#354eb0)"],
+                horizontal=True
+            )
+            outline_color = "black" if outline_style == "Black" else "#354eb0"
+            
+            # DPI setting
+            dpi = st.slider("Image Quality (DPI)", 100, 600, 300, step=50)
+            
+            # Generate button
+            can_generate = use_local_file or (county_shapefile_source == "upload" and 'county_shapefile' in locals() and county_shapefile is not None)
+            
+            if st.button("🗺️ Generate County Maps", type="primary", key="generate_counties", disabled=not can_generate):
+                with st.spinner(f"Generating county maps for {us_states[selected_state]}..."):
+                    try:
+                        # Read the shapefile
+                        if use_local_file:
+                            counties_gdf = gpd.read_file(local_shapefile_path)
+                        else:
+                            counties_gdf = gpd.read_file(county_shapefile)
+                        
+                        # Filter to selected state
+                        state_counties = counties_gdf[counties_gdf['STUSPS'] == selected_state]
+                        
+                        if len(state_counties) == 0:
+                            st.error(f"No counties found for {selected_state}. Please check your shapefile.")
+                        else:
+                            state_name = state_counties.iloc[0]['STATE_NAME']
+                            
+                            # Create a dictionary to store generated images
+                            county_images = {}
+                            progress_bar = st.progress(0)
+                            
+                            total_counties = len(state_counties)
+                            
+                            for idx, (_, county_row) in enumerate(state_counties.iterrows()):
+                                county_name = county_row['NAME']
+                                county_fips = county_row['GEOID']
+                                
+                                # Create color column
+                                state_counties_copy = state_counties.copy()
+                                state_counties_copy['color'] = state_counties_copy['GEOID'].apply(
+                                    lambda x: highlight_color if x == county_fips else base_color
+                                )
+                                
+                                # Create plot
+                                fig, ax = plt.subplots(figsize=(8, 6))
+                                state_counties_copy.plot(
+                                    ax=ax,
+                                    color=state_counties_copy['color'],
+                                    edgecolor=outline_color,
+                                    linewidth=0.5
+                                )
+                                
+                                # Remove axes
+                                ax.set_axis_off()
+                                
+                                # Save to BytesIO
+                                buf = io.BytesIO()
+                                plt.savefig(
+                                    buf,
+                                    format='PNG',
+                                    dpi=dpi,
+                                    bbox_inches='tight',
+                                    transparent=True,
+                                    facecolor='none'
+                                )
+                                plt.close(fig)
+                                buf.seek(0)
+                                
+                                # Clean filename
+                                safe_county_name = "".join(c if c.isalnum() else "_" for c in county_name)
+                                filename = f"{state_name}_{safe_county_name}.png"
+                                
+                                county_images[filename] = buf.getvalue()
+                                
+                                # Update progress
+                                progress_bar.progress((idx + 1) / total_counties)
+                            
+                            st.session_state['county_images'] = county_images
+                            st.session_state['county_state_name'] = state_name
+                            st.success(f"✅ Generated {len(county_images)} county maps for {state_name}!")
+                    
+                    except Exception as e:
+                        st.error(f"Error processing shapefile: {str(e)}")
+        
+        with col2:
+            st.subheader("Results")
+            
+            if 'county_images' in st.session_state and st.session_state['county_images']:
+                county_images = st.session_state['county_images']
+                state_name = st.session_state['county_state_name']
+                
+                # Preview first county
+                first_image = list(county_images.values())[0]
+                first_filename = list(county_images.keys())[0]
+                st.image(first_image, caption=f"Preview: {first_filename}", use_container_width=True)
+                
+                # Create ZIP file
+                zip_buf = io.BytesIO()
+                with zipfile.ZipFile(zip_buf, 'w', zipfile.ZIP_DEFLATED) as zip_file:
+                    for filename, img_bytes in county_images.items():
+                        zip_file.writestr(filename, img_bytes)
+                
+                zip_buf.seek(0)
+                
+                # Download ZIP
+                st.download_button(
+                    label=f"⬇️ Download All {len(county_images)} County Maps (ZIP)",
+                    data=zip_buf.getvalue(),
+                    file_name=f"{state_name}_county_maps.zip",
+                    mime="application/zip",
+                    key="download_county_zip"
+                )
+                
+                # Individual downloads
+                with st.expander("Download Individual County Maps"):
+                    cols = st.columns(3)
+                    for idx, (filename, img_bytes) in enumerate(county_images.items()):
+                        col = cols[idx % 3]
+                        with col:
+                            # Extract county name for display
+                            county_display = filename.replace(f"{state_name}_", "").replace(".png", "").replace("_", " ")
+                            st.download_button(
+                                label=county_display,
+                                data=img_bytes,
+                                file_name=filename,
+                                mime="image/png",
+                                key=f"download_county_{idx}"
+                            )
+            else:
+                st.info("Configure settings and click 'Generate County Maps' to create maps.")
+                st.markdown("""
+                ### How to get county shapefiles:
+                1. Visit the [US Census Bureau TIGER/Line Shapefiles](https://www.census.gov/geographies/mapping-files/time-series/geo/tiger-line-file.html)
+                2. Download the county shapefile (e.g., `cb_2020_us_county_20m.zip`)
+                3. Upload the ZIP file here
+                
+                The generator will create individual maps for each county in your selected state, 
+                with each county highlighted in turn.
+                """)
         
     with tab1:
         st.header("Single Image Generator")
@@ -338,9 +541,23 @@ else:
     3. Generate all images at once
     4. Download as a ZIP file
     
+    **Background Remover:**
+    1. Upload overlay images
+    2. Select an image and pick the background color to remove
+    3. Adjust threshold to fine-tune transparency
+    4. Download or add to your overlay collection
+    
+    **County Map Generator:**
+    1. Download county shapefiles from [US Census Bureau](https://www.census.gov/geographies/mapping-files/time-series/geo/tiger-line-file.html)
+    2. Upload the ZIP file
+    3. Select your state and customize colors
+    4. Generate individual maps for each county
+    5. Download all as ZIP or individually
+    
     ### Tips:
     - Use the configuration sliders to position text and overlays
     - Text supports multiple lines (use line breaks in the text area)
     - Overlay images are automatically resized to fit within max dimensions
     - In batch mode, overlay reference is optional
+    - County maps are generated with transparent backgrounds for easy compositing
     """)
