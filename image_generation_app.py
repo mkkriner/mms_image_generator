@@ -13,6 +13,7 @@ import geopandas as gpd
 import matplotlib.pyplot as plt
 import matplotlib
 matplotlib.use('Agg')  # Use non-interactive backend
+import os
 
 # Page config
 st.set_page_config(page_title="Custom Image Generator", layout="wide")
@@ -227,11 +228,10 @@ if template_file and font_file:
             # Check if local file exists
             local_shapefile_path = 'cb_2020_us_county_20m.zip'
             
-            import os
             use_local_file = os.path.exists(local_shapefile_path)
             
             if use_local_file:
-                st.success("✅ Using local shapefile from Google Drive")
+                st.success("✅ Using included shapefile")
                 county_shapefile_source = "local"
             else:
                 # Upload county shapefile
@@ -254,11 +254,28 @@ if template_file and font_file:
             )
             outline_color = "black" if outline_style == "Black" else "#354eb0"
             
+            # Output mode selection
+            output_mode = st.radio(
+                "Output Mode:",
+                options=["Maps Only", "Complete Images (with template & text)"],
+                key="county_output_mode",
+                help="Maps Only: Just county maps. Complete Images: Combines maps with template and adds '[County] residents needed!' text."
+            )
+            
             # DPI setting
             dpi = st.slider("Image Quality (DPI)", 100, 600, 300, step=50)
             
+            # Show template options if Complete Images is selected
+            use_template = output_mode == "Complete Images (with template & text)"
+            
+            if use_template and not (template_file and font_file):
+                st.warning("⚠️ Please upload a template image and font in the sidebar to use Complete Images mode.")
+            
             # Generate button
             can_generate = use_local_file or (county_shapefile_source == "upload" and 'county_shapefile' in locals() and county_shapefile is not None)
+            
+            if use_template:
+                can_generate = can_generate and template_file and font_file
             
             if st.button("🗺️ Generate County Maps", type="primary", key="generate_counties", disabled=not can_generate):
                 with st.spinner(f"Generating county maps for {us_states[selected_state]}..."):
@@ -318,9 +335,36 @@ if template_file and font_file:
                                 plt.close(fig)
                                 buf.seek(0)
                                 
+                                # If using template mode, combine with template and text
+                                if use_template:
+                                    # Load the county map as an overlay
+                                    county_map_img = Image.open(buf).convert("RGBA")
+                                    
+                                    # Generate the complete image
+                                    canvas = template.copy()
+                                    draw = ImageDraw.Draw(canvas)
+                                    
+                                    # Paste county map overlay
+                                    county_map_resized = fit_into(county_map_img, overlay_max_w, overlay_max_h)
+                                    canvas.alpha_composite(county_map_resized, (overlay_x, overlay_y))
+                                    
+                                    # Draw text
+                                    text = f"{county_name}\nresidents needed!"
+                                    draw.multiline_text((text_x, text_y), text, font=font, 
+                                                      fill=text_color_rgb, spacing=text_spacing, align=text_align)
+                                    
+                                    # Save the complete image
+                                    final_buf = io.BytesIO()
+                                    canvas.save(final_buf, format='PNG')
+                                    final_buf.seek(0)
+                                    buf = final_buf
+                                
                                 # Clean filename
                                 safe_county_name = "".join(c if c.isalnum() else "_" for c in county_name)
-                                filename = f"{state_name}_{safe_county_name}.png"
+                                if use_template:
+                                    filename = f"verasight_survey_{state_name}_{safe_county_name}.png"
+                                else:
+                                    filename = f"{state_name}_{safe_county_name}.png"
                                 
                                 county_images[filename] = buf.getvalue()
                                 
@@ -329,7 +373,8 @@ if template_file and font_file:
                             
                             st.session_state['county_images'] = county_images
                             st.session_state['county_state_name'] = state_name
-                            st.success(f"✅ Generated {len(county_images)} county maps for {state_name}!")
+                            st.session_state['county_output_mode'] = output_mode
+                            st.success(f"✅ Generated {len(county_images)} county {'images' if use_template else 'maps'} for {state_name}!")
                     
                     except Exception as e:
                         st.error(f"Error processing shapefile: {str(e)}")
