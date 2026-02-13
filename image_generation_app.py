@@ -344,8 +344,14 @@ if template_file and font_file:
                                     canvas = template.copy()
                                     draw = ImageDraw.Draw(canvas)
                                     
+                                    # Apply special scaling for Alaska (it's geographically huge)
+                                    if selected_state == 'AK':
+                                        # Alaska gets 2x the normal max dimensions
+                                        county_map_resized = fit_into(county_map_img, overlay_max_w * 2, overlay_max_h * 2)
+                                    else:
+                                        county_map_resized = fit_into(county_map_img, overlay_max_w, overlay_max_h)
+                                    
                                     # Paste county map overlay
-                                    county_map_resized = fit_into(county_map_img, overlay_max_w, overlay_max_h)
                                     canvas.alpha_composite(county_map_resized, (overlay_x, overlay_y))
                                     
                                     # Determine subdivision type based on state
