@@ -772,7 +772,7 @@ with tab5:
         )
         state_recolor_color = None
         if recolor_states:
-            state_recolor_color = st.color_picker("State Image Color", "#06204a", key="state_recolor_color")
+            state_recolor_color = st.color_picker("State Image Color", "#FFFFFF", key="state_recolor_color")
             state_recolor_rgb = tuple(int(state_recolor_color.lstrip('#')[i:i+2], 16) for i in (0, 2, 4))
 
         # Show template options if Complete Images is selected
