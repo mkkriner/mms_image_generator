@@ -144,6 +144,59 @@ def clamp_box_to_zone(center_x, center_y, desired_w, desired_h, zone_max_w, zone
     return box_x, box_y, capped_w, capped_h
 
 
+def build_county_overlay_image(state_counties_gdf, county_fips, highlight_color, base_color, outline_color, dpi):
+    """Render a single county-highlight map with matplotlib and return it as a
+    transparent-background PIL RGBA image. Shared by the batch County Map
+    Generator and its single-county preview so the two always match exactly."""
+    state_counties_copy = state_counties_gdf.copy()
+    state_counties_copy['color'] = state_counties_copy['GEOID'].apply(
+        lambda x: highlight_color if x == county_fips else base_color
+    )
+    fig, ax = plt.subplots(figsize=(8, 6))
+    state_counties_copy.plot(
+        ax=ax,
+        color=state_counties_copy['color'],
+        edgecolor=outline_color,
+        linewidth=0.5
+    )
+    ax.set_axis_off()
+    buf = io.BytesIO()
+    plt.savefig(buf, format='PNG', dpi=dpi, bbox_inches='tight', transparent=True, facecolor='none')
+    plt.close(fig)
+    buf.seek(0)
+    return Image.open(buf).convert("RGBA")
+
+
+def composite_complete_image(template, font, overlay_img, text,
+                              overlay_x, overlay_y, overlay_max_w, overlay_max_h,
+                              overlay_zone_max_w, overlay_zone_max_h, oversized=False):
+    """Composite one overlay + text onto the template — the exact same logic
+    used inside the County and State Map Generators' batch loops. `oversized=True`
+    reproduces the Alaska 6x-from-center scaling. Shared by the batch generators
+    and their previews so a preview is always a true representation of the
+    final output."""
+    canvas = template.copy()
+    draw = ImageDraw.Draw(canvas)
+
+    if oversized:
+        center_x = overlay_x + overlay_max_w / 2
+        center_y = overlay_y + overlay_max_h / 2
+        box_x, box_y_, box_w, box_h = clamp_box_to_zone(
+            center_x, center_y,
+            overlay_max_w * 6, overlay_max_h * 6,
+            overlay_zone_max_w, overlay_zone_max_h,
+            canvas_w=canvas.width, canvas_h=canvas.height
+        )
+    else:
+        box_w, box_h = overlay_max_w, overlay_max_h
+        box_x, box_y_ = overlay_x, overlay_y
+
+    overlay_resized = fit_into(overlay_img, box_w, box_h)
+    paste_centered(canvas, overlay_resized, box_x, box_y_, box_w, box_h)
+    draw_text(draw, text, font)
+    return canvas
+
+
 def get_font(size):
     """Create a font instance at the given size from the uploaded font bytes."""
     return ImageFont.truetype(io.BytesIO(font_bytes), size)
@@ -508,7 +561,78 @@ with tab4:
         
         if use_template and not (template_file and font_file):
             st.warning("⚠️ Please upload a template image and font in the sidebar to use Complete Images mode.")
-        
+
+        # ------------------------------------------------------------------
+        # Preview: let the user check one county's Complete Image (or map)
+        # before committing to generating the whole state's batch. Reuses
+        # build_county_overlay_image / composite_complete_image so the
+        # preview is pixel-for-pixel what the batch run will produce.
+        # ------------------------------------------------------------------
+        st.divider()
+        st.subheader("👁️ Preview")
+        st.caption("Check one county's image before generating the whole state.")
+
+        preview_can_load = use_local_file or (
+            county_shapefile_source == "upload" and 'county_shapefile' in locals() and county_shapefile is not None
+        )
+
+        if st.button("Load Counties for Preview", key="load_preview_counties", disabled=not preview_can_load):
+            try:
+                if use_local_file:
+                    _preview_gdf_full = gpd.read_file(local_shapefile_path)
+                else:
+                    _preview_gdf_full = gpd.read_file(county_shapefile)
+                st.session_state['preview_county_gdf'] = _preview_gdf_full[_preview_gdf_full['STUSPS'] == selected_state]
+                st.session_state['preview_county_state'] = selected_state
+                # Clear any preview image from a previously-loaded state
+                st.session_state.pop('county_preview_img', None)
+            except Exception as e:
+                st.error(f"Error loading shapefile for preview: {str(e)}")
+
+        if st.session_state.get('preview_county_state') == selected_state and 'preview_county_gdf' in st.session_state:
+            _preview_gdf = st.session_state['preview_county_gdf']
+
+            if len(_preview_gdf) == 0:
+                st.warning(f"No counties found for {selected_state} in the loaded shapefile.")
+            else:
+                county_names_list = sorted(_preview_gdf['NAME'].tolist())
+                preview_county_name = st.selectbox("County to preview:", county_names_list, key="preview_county_select")
+
+                preview_needs_template = use_template and not (template and font)
+                if preview_needs_template:
+                    st.caption("⚠️ Complete Images mode needs a template + font; previewing the map only.")
+
+                if st.button("🔍 Generate Preview", key="generate_county_preview"):
+                    with st.spinner(f"Rendering preview for {preview_county_name}..."):
+                        county_row_preview = _preview_gdf[_preview_gdf['NAME'] == preview_county_name].iloc[0]
+                        county_fips_preview = county_row_preview['GEOID']
+
+                        map_img = build_county_overlay_image(
+                            _preview_gdf, county_fips_preview,
+                            highlight_color, base_color, outline_color, dpi
+                        )
+
+                        if use_template and template and font:
+                            if selected_state == 'AK':
+                                subdivision = 'Borough'
+                            elif selected_state == 'LA':
+                                subdivision = 'Parish'
+                            else:
+                                subdivision = 'County'
+                            text = f"{preview_county_name} {subdivision}\nvoices needed!"
+                            preview_canvas = composite_complete_image(
+                                template, font, map_img, text,
+                                overlay_x, overlay_y, overlay_max_w, overlay_max_h,
+                                overlay_zone_max_w, overlay_zone_max_h,
+                                oversized=(selected_state == 'AK')
+                            )
+                            st.session_state['county_preview_img'] = preview_canvas
+                        else:
+                            st.session_state['county_preview_img'] = map_img
+                        st.session_state['county_preview_label'] = preview_county_name
+        else:
+            st.caption("Click 'Load Counties for Preview' above to pick a county to check.")
+
         # Generate button
         can_generate = use_local_file or (county_shapefile_source == "upload" and 'county_shapefile' in locals() and county_shapefile is not None)
         
@@ -542,47 +666,16 @@ with tab4:
                         for idx, (_, county_row) in enumerate(state_counties.iterrows()):
                             county_name = county_row['NAME']
                             county_fips = county_row['GEOID']
-                            
-                            # Create color column
-                            state_counties_copy = state_counties.copy()
-                            state_counties_copy['color'] = state_counties_copy['GEOID'].apply(
-                                lambda x: highlight_color if x == county_fips else base_color
+
+                            # Render the county-highlight map (shared helper —
+                            # identical logic to the preview above)
+                            county_map_img = build_county_overlay_image(
+                                state_counties, county_fips,
+                                highlight_color, base_color, outline_color, dpi
                             )
-                            
-                            # Create plot
-                            fig, ax = plt.subplots(figsize=(8, 6))
-                            state_counties_copy.plot(
-                                ax=ax,
-                                color=state_counties_copy['color'],
-                                edgecolor=outline_color,
-                                linewidth=0.5
-                            )
-                            
-                            # Remove axes
-                            ax.set_axis_off()
-                            
-                            # Save to BytesIO
-                            buf = io.BytesIO()
-                            plt.savefig(
-                                buf,
-                                format='PNG',
-                                dpi=dpi,
-                                bbox_inches='tight',
-                                transparent=True,
-                                facecolor='none'
-                            )
-                            plt.close(fig)
-                            buf.seek(0)
                             
                             # If using template mode, combine with template and text
                             if use_template:
-                                # Load the county map as an overlay
-                                county_map_img = Image.open(buf).convert("RGBA")
-                                
-                                # Generate the complete image
-                                canvas = template.copy()
-                                draw = ImageDraw.Draw(canvas)
-                                
                                 # Determine subdivision type based on state
                                 if selected_state == 'AK':
                                     subdivision = 'Borough'
@@ -596,46 +689,31 @@ with tab4:
                                 # "voices needed!" on line 2 (drawn in the
                                 # secondary color) — matches the July 2026 template.
                                 text = f"{county_name} {subdivision}\nvoices needed!"
-                                
-                                # The overlay sits in a fixed corner box (top-right
-                                # badge area on the new template). Alaska is
-                                # geographically huge and renders tiny within a
-                                # normal-sized box, so it gets scaled up 6x —
-                                # expanded from the box's own center, then capped
-                                # to the oversized-shape zone so it can never
-                                # overflow the canvas or run into the text.
-                                if selected_state == 'AK':
-                                    center_x = overlay_x + overlay_max_w / 2
-                                    center_y = overlay_y + overlay_max_h / 2
-                                    box_x, box_y_, box_w, box_h = clamp_box_to_zone(
-                                        center_x, center_y,
-                                        overlay_max_w * 6, overlay_max_h * 6,
-                                        overlay_zone_max_w, overlay_zone_max_h,
-                                        canvas_w=canvas.width, canvas_h=canvas.height
-                                    )
-                                else:
-                                    box_w, box_h = overlay_max_w, overlay_max_h
-                                    box_x, box_y_ = overlay_x, overlay_y
-                                
-                                county_map_resized = fit_into(county_map_img, box_w, box_h)
-                                
-                                # Paste county map overlay, centered within its box
-                                paste_centered(canvas, county_map_resized, box_x, box_y_, box_w, box_h)
-                                
-                                # Draw text
-                                draw_text(draw, text, font, debug_label=county_name)
-                                
+
+                                canvas = composite_complete_image(
+                                    template, font, county_map_img, text,
+                                    overlay_x, overlay_y, overlay_max_w, overlay_max_h,
+                                    overlay_zone_max_w, overlay_zone_max_h,
+                                    oversized=(selected_state == 'AK')
+                                )
+
+                                # Text-sizing debug log needs its own entry
+                                # (composite_complete_image doesn't take a
+                                # debug_label, so log it directly here)
+                                draw_dummy = ImageDraw.Draw(Image.new("RGBA", (1, 1)))
+                                get_render_font(draw_dummy, text, debug_label=county_name)
+
                                 # Save the complete image, capped to ~490KB since
                                 # this is the full template-composited output
-                                final_buf = save_optimized_png(canvas)
-                                buf = final_buf
+                                buf = save_optimized_png(canvas)
+                            else:
+                                buf = io.BytesIO()
+                                county_map_img.save(buf, format='PNG')
+                                buf.seek(0)
                             
                             # Clean filename
                             safe_county_name = "".join(c if c.isalnum() else "_" for c in county_name)
-                            if use_template:
-                                filename = f"{state_name}_{safe_county_name}.png"
-                            else:
-                                filename = f"{state_name}_{safe_county_name}.png"
+                            filename = f"{state_name}_{safe_county_name}.png"
                             
                             county_images[filename] = buf.getvalue()
                             
@@ -652,6 +730,15 @@ with tab4:
     
     with col2:
         st.subheader("Results")
+
+        # Single-county preview, shown above the batch results
+        if 'county_preview_img' in st.session_state:
+            st.image(
+                st.session_state['county_preview_img'],
+                caption=f"Preview: {st.session_state.get('county_preview_label', '')}",
+                use_container_width=True
+            )
+            st.divider()
         
         if 'county_images' in st.session_state and st.session_state['county_images']:
             county_images = st.session_state['county_images']
@@ -781,6 +868,84 @@ with tab5:
         if use_state_template and not (template_file and font_file):
             st.warning("⚠️ Please upload a template image and font in the sidebar to use Complete Images mode.")
 
+        # ------------------------------------------------------------------
+        # Preview: let the user check one state's Complete Image (or map)
+        # before committing to generating all 50 + DC. Reuses
+        # composite_complete_image so the preview matches the batch exactly.
+        # ------------------------------------------------------------------
+        st.divider()
+        st.subheader("👁️ Preview")
+        st.caption("Check one state's image before generating the full batch.")
+
+        preview_can_load_states = use_local_state_images or state_images_zip is not None
+
+        if st.button("Load State Images for Preview", key="load_preview_states", disabled=not preview_can_load_states):
+            try:
+                _image_lookup_preview = {}
+                if use_local_state_images:
+                    for fname in sorted(os.listdir(local_state_images_dir)):
+                        fpath = os.path.join(local_state_images_dir, fname)
+                        if not os.path.isfile(fpath):
+                            continue
+                        stem, ext = os.path.splitext(fname)
+                        if ext.lower() not in ('.png', '.jpg', '.jpeg'):
+                            continue
+                        with open(fpath, 'rb') as f:
+                            _image_lookup_preview[normalize_key(stem)] = f.read()
+                else:
+                    with zipfile.ZipFile(state_images_zip) as zf:
+                        for info in zf.infolist():
+                            if info.is_dir():
+                                continue
+                            fname = os.path.basename(info.filename)
+                            stem, ext = os.path.splitext(fname)
+                            if ext.lower() not in ('.png', '.jpg', '.jpeg'):
+                                continue
+                            _image_lookup_preview[normalize_key(stem)] = zf.read(info)
+                st.session_state['preview_state_image_lookup'] = _image_lookup_preview
+                st.session_state.pop('state_preview_img', None)
+            except Exception as e:
+                st.error(f"Error loading state images for preview: {str(e)}")
+
+        if 'preview_state_image_lookup' in st.session_state:
+            _lookup = st.session_state['preview_state_image_lookup']
+            available_preview_states = [
+                us_states[ab] for ab in us_states
+                if _lookup.get(normalize_key(us_states[ab])) is not None or _lookup.get(normalize_key(ab)) is not None
+            ]
+            if not available_preview_states:
+                st.warning("No matching state images found for preview.")
+            else:
+                preview_state_choice = st.selectbox("State to preview:", available_preview_states, key="preview_state_select")
+
+                preview_needs_template = use_state_template and not (template and font)
+                if preview_needs_template:
+                    st.caption("⚠️ Complete Images mode needs a template + font; previewing the map only.")
+
+                if st.button("🔍 Generate Preview", key="generate_state_preview"):
+                    with st.spinner(f"Rendering preview for {preview_state_choice}..."):
+                        preview_abbrev = [ab for ab, name in us_states.items() if name == preview_state_choice][0]
+                        match_bytes = _lookup.get(normalize_key(preview_state_choice)) or _lookup.get(normalize_key(preview_abbrev))
+                        state_map_img_preview = Image.open(io.BytesIO(match_bytes)).convert("RGBA")
+
+                        if recolor_states:
+                            state_map_img_preview = recolor_visible_pixels(state_map_img_preview, state_recolor_rgb)
+
+                        if use_state_template and template and font:
+                            text = f"{preview_state_choice}\nvoices needed!"
+                            preview_canvas = composite_complete_image(
+                                template, font, state_map_img_preview, text,
+                                overlay_x, overlay_y, overlay_max_w, overlay_max_h,
+                                overlay_zone_max_w, overlay_zone_max_h,
+                                oversized=(preview_abbrev == 'AK')
+                            )
+                            st.session_state['state_preview_img'] = preview_canvas
+                        else:
+                            st.session_state['state_preview_img'] = state_map_img_preview
+                        st.session_state['state_preview_label'] = preview_state_choice
+        else:
+            st.caption("Click 'Load State Images for Preview' above to pick a state to check.")
+
         # Generate button
         can_generate_states = use_local_state_images or state_images_zip is not None
 
@@ -846,41 +1011,20 @@ with tab5:
 
                             # If using template mode, combine with template and text
                             if use_state_template:
-                                canvas = template.copy()
-                                draw = ImageDraw.Draw(canvas)
-
                                 # Two-line text: state name on line 1 (highlight
                                 # color), static "voices needed!" on line 2
                                 # (secondary color) — matches the July 2026 template.
                                 text = f"{state_full_name}\nvoices needed!"
 
-                                # The overlay sits in a fixed corner box (top-right
-                                # badge area on the new template). Alaska is
-                                # geographically huge and renders tiny within a
-                                # normal-sized box, so it gets scaled up 6x —
-                                # expanded from the box's own center, then capped
-                                # to the oversized-shape zone so it can never
-                                # overflow the canvas or run into the text.
-                                if abbrev == 'AK':
-                                    center_x = overlay_x + overlay_max_w / 2
-                                    center_y = overlay_y + overlay_max_h / 2
-                                    box_x, box_y_, box_w, box_h = clamp_box_to_zone(
-                                        center_x, center_y,
-                                        overlay_max_w * 6, overlay_max_h * 6,
-                                        overlay_zone_max_w, overlay_zone_max_h,
-                                        canvas_w=canvas.width, canvas_h=canvas.height
-                                    )
-                                else:
-                                    box_w, box_h = overlay_max_w, overlay_max_h
-                                    box_x, box_y_ = overlay_x, overlay_y
+                                canvas = composite_complete_image(
+                                    template, font, state_map_img, text,
+                                    overlay_x, overlay_y, overlay_max_w, overlay_max_h,
+                                    overlay_zone_max_w, overlay_zone_max_h,
+                                    oversized=(abbrev == 'AK')
+                                )
 
-                                state_map_resized = fit_into(state_map_img, box_w, box_h)
-
-                                # Paste state image, centered within its box
-                                paste_centered(canvas, state_map_resized, box_x, box_y_, box_w, box_h)
-
-                                # Draw text
-                                draw_text(draw, text, font, debug_label=state_full_name)
+                                draw_dummy = ImageDraw.Draw(Image.new("RGBA", (1, 1)))
+                                get_render_font(draw_dummy, text, debug_label=state_full_name)
 
                                 # Save the complete image, capped to ~490KB since
                                 # this is the full template-composited output
@@ -896,10 +1040,7 @@ with tab5:
 
                             # Clean filename
                             safe_state_name = "".join(c if c.isalnum() else "_" for c in state_full_name)
-                            if use_state_template:
-                                filename = f"{safe_state_name}.png"
-                            else:
-                                filename = f"{safe_state_name}.png"
+                            filename = f"{safe_state_name}.png"
 
                             state_images[filename] = out_bytes
 
@@ -923,6 +1064,15 @@ with tab5:
 
     with col2:
         st.subheader("Results")
+
+        # Single-state preview, shown above the batch results
+        if 'state_preview_img' in st.session_state:
+            st.image(
+                st.session_state['state_preview_img'],
+                caption=f"Preview: {st.session_state.get('state_preview_label', '')}",
+                use_container_width=True
+            )
+            st.divider()
 
         if 'state_images' in st.session_state and st.session_state['state_images']:
             state_images = st.session_state['state_images']
@@ -1166,15 +1316,17 @@ with st.expander("ℹ️ How to Use"):
     2. Download county shapefiles from [US Census Bureau](https://www.census.gov/geographies/mapping-files/time-series/geo/tiger-line-file.html)
     3. Upload the ZIP file
     4. Select your state and customize colors
-    5. Generate individual maps for each county
-    6. Download all as ZIP or individually
+    5. Use the "Preview" section to check one county's image before running the full batch
+    6. Generate individual maps for each county
+    7. Download all as ZIP or individually
     
     **State Map Generator:**
     1. State images are already included and can change colors. If you need new images, follow steps 2-5.
     2. Place a folder named `state_images` next to the app with one pre-made image per state (named by state name or abbreviation), or upload a ZIP of the same
     3. Choose "Maps Only" or "Complete Images (with template & text)"
-    4. Click "Generate All State Maps" to process all 50 states + DC in one batch
-    5. Download all as ZIP or individually
+    4. Use the "Preview" section to check one state's image before running the full batch
+    5. Click "Generate All State Maps" to process all 50 states + DC in one batch
+    6. Download all as ZIP or individually
     
     ### Tips:
     - Use the configuration sliders to position text and overlays
@@ -1187,4 +1339,5 @@ with st.expander("ℹ️ How to Use"):
     - The State Map Generator pulls one pre-made image per state from a local `state_images` folder (or an uploaded ZIP), matching files by state name or abbreviation, and processes all 50 states + DC in one batch
     - In the State Map Generator, "Recolor state images" swaps the shape's color for one you choose while preserving its transparent background and edge smoothing — handy if the source images are all one color (e.g. dark blue) and you want a different one
     - Full "Complete Images" downloads (template + overlay + text) are automatically size-optimized to stay under ~490KB per file; raw "Maps Only" exports are left untouched at full quality
+    - Both the County and State Map Generators now have a "Preview" section so you can check one county/state's exact output — including text sizing and overlay placement — before committing to the full batch run
     """)
