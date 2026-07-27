@@ -27,13 +27,78 @@ st.sidebar.image(logo)
 
 # File uploaders
 st.sidebar.header("Upload Files")
-template_file = st.sidebar.file_uploader("Upload Template Image", type=['png', 'jpg', 'jpeg'])
-if template_file:
-    _template_preview = Image.open(template_file)
+# ----------------------------------------------------------------------
+# Template selection: pick from a local 'templates/' folder if one exists
+# next to the app (same pattern as the State Map Generator's state_images
+# folder), otherwise fall back to a plain file uploader. Either path ends
+# up setting `template_bytes` to the raw file bytes.
+# ----------------------------------------------------------------------
+local_templates_dir = 'templates'
+use_local_templates = os.path.isdir(local_templates_dir)
+template_options = []
+if use_local_templates:
+    template_options = sorted([
+        f for f in os.listdir(local_templates_dir)
+        if f.lower().endswith(('.png', '.jpg', '.jpeg'))
+    ])
+
+template_bytes = None
+if template_options:
+    template_source_mode = st.sidebar.radio(
+        "Template source", ["Choose from library", "Upload custom"],
+        horizontal=True, key="template_source_mode"
+    )
+    if template_source_mode == "Choose from library":
+        chosen_template_name = st.sidebar.selectbox("Template", template_options, key="template_select")
+        with open(os.path.join(local_templates_dir, chosen_template_name), 'rb') as f:
+            template_bytes = f.read()
+    else:
+        _uploaded_template = st.sidebar.file_uploader("Upload Template Image", type=['png', 'jpg', 'jpeg'])
+        if _uploaded_template:
+            template_bytes = _uploaded_template.getvalue()
+else:
+    if use_local_templates:
+        st.sidebar.caption("No images found in 'templates' folder — upload one instead.")
+    _uploaded_template = st.sidebar.file_uploader("Upload Template Image", type=['png', 'jpg', 'jpeg'])
+    if _uploaded_template:
+        template_bytes = _uploaded_template.getvalue()
+
+if template_bytes:
+    _template_preview = Image.open(io.BytesIO(template_bytes))
     st.sidebar.caption(f"📐 Template size: {_template_preview.width} × {_template_preview.height} px",
                         help="Set text_max_width to roughly the width of the template minus 100-150px.")
-    template_file.seek(0)  # reset so it can be read again later
-font_file = st.sidebar.file_uploader("Upload Font File (.ttf)", type=['ttf'])
+
+# ----------------------------------------------------------------------
+# Font selection: same local-folder-first pattern, reading from 'fonts/'
+# if present. Ends up setting `font_bytes` to the raw .ttf bytes.
+# ----------------------------------------------------------------------
+local_fonts_dir = 'fonts'
+use_local_fonts = os.path.isdir(local_fonts_dir)
+font_options = []
+if use_local_fonts:
+    font_options = sorted([f for f in os.listdir(local_fonts_dir) if f.lower().endswith('.ttf')])
+
+font_bytes = None
+if font_options:
+    font_source_mode = st.sidebar.radio(
+        "Font source", ["Choose from library", "Upload custom"],
+        horizontal=True, key="font_source_mode"
+    )
+    if font_source_mode == "Choose from library":
+        chosen_font_name = st.sidebar.selectbox("Font", font_options, key="font_select")
+        with open(os.path.join(local_fonts_dir, chosen_font_name), 'rb') as f:
+            font_bytes = f.read()
+    else:
+        _uploaded_font = st.sidebar.file_uploader("Upload Font File (.ttf)", type=['ttf'])
+        if _uploaded_font:
+            font_bytes = _uploaded_font.getvalue()
+else:
+    if use_local_fonts:
+        st.sidebar.caption("No .ttf files found in 'fonts' folder — upload one instead.")
+    _uploaded_font = st.sidebar.file_uploader("Upload Font File (.ttf)", type=['ttf'])
+    if _uploaded_font:
+        font_bytes = _uploaded_font.getvalue()
+
 overlay_files = st.sidebar.file_uploader("Upload Overlay Images", type=['png', 'jpg', 'jpeg'], accept_multiple_files=True)
 
 # Configuration inputs
@@ -370,16 +435,18 @@ def generate_image(template, overlay, custom_text, font):
 
 # Main app logic
 # Load template (optional here: Single Image/Batch tabs require it, but County/State
-# Map Generators can run in "Maps Only" mode without a template or font)
+# Map Generators can run in "Maps Only" mode without a template or font).
+# template_bytes was set in the sidebar, either from the 'templates/' library
+# folder or from a manual upload.
 template = None
-if template_file:
-    template = Image.open(template_file).convert("RGBA")
+if template_bytes:
+    template = Image.open(io.BytesIO(template_bytes)).convert("RGBA")
 
-# Load font (keep raw bytes so we can rebuild it at different sizes for auto-shrink)
-font_bytes = None
+# Load font (keep raw bytes so we can rebuild it at different sizes for
+# auto-shrink). font_bytes was set in the sidebar, either from the 'fonts/'
+# library folder or from a manual upload.
 font = None
-if font_file:
-    font_bytes = font_file.getvalue()
+if font_bytes:
     font = ImageFont.truetype(io.BytesIO(font_bytes), font_size)
 
 # Load overlay images
@@ -559,7 +626,7 @@ with tab4:
         # Show template options if Complete Images is selected
         use_template = output_mode == "Complete Images (with template & text)"
         
-        if use_template and not (template_file and font_file):
+        if use_template and not (template_bytes and font_bytes):
             st.warning("⚠️ Please upload a template image and font in the sidebar to use Complete Images mode.")
 
         # ------------------------------------------------------------------
@@ -569,7 +636,7 @@ with tab4:
         # preview is pixel-for-pixel what the batch run will produce.
         # ------------------------------------------------------------------
         st.divider()
-        st.subheader("👁️ Preview")
+        st.subheader("Preview")
         st.caption("Check one county's image before generating the whole state.")
 
         preview_can_load = use_local_file or (
@@ -602,7 +669,7 @@ with tab4:
                 if preview_needs_template:
                     st.caption("⚠️ Complete Images mode needs a template + font; previewing the map only.")
 
-                if st.button("🔍 Generate Preview", key="generate_county_preview"):
+                if st.button("Generate Preview", key="generate_county_preview"):
                     with st.spinner(f"Rendering preview for {preview_county_name}..."):
                         county_row_preview = _preview_gdf[_preview_gdf['NAME'] == preview_county_name].iloc[0]
                         county_fips_preview = county_row_preview['GEOID']
@@ -637,7 +704,7 @@ with tab4:
         can_generate = use_local_file or (county_shapefile_source == "upload" and 'county_shapefile' in locals() and county_shapefile is not None)
         
         if use_template:
-            can_generate = can_generate and template_file and font_file
+            can_generate = can_generate and template_bytes and font_bytes
         
         if st.button("🗺️ Generate County Maps", type="primary", key="generate_counties", disabled=not can_generate):
             with st.spinner(f"Generating county maps for {us_states[selected_state]}..."):
@@ -865,7 +932,7 @@ with tab5:
         # Show template options if Complete Images is selected
         use_state_template = state_output_mode == "Complete Images (with template & text)"
 
-        if use_state_template and not (template_file and font_file):
+        if use_state_template and not (template_bytes and font_bytes):
             st.warning("⚠️ Please upload a template image and font in the sidebar to use Complete Images mode.")
 
         # ------------------------------------------------------------------
@@ -874,7 +941,7 @@ with tab5:
         # composite_complete_image so the preview matches the batch exactly.
         # ------------------------------------------------------------------
         st.divider()
-        st.subheader("👁️ Preview")
+        st.subheader("Preview")
         st.caption("Check one state's image before generating the full batch.")
 
         preview_can_load_states = use_local_state_images or state_images_zip is not None
@@ -922,7 +989,7 @@ with tab5:
                 if preview_needs_template:
                     st.caption("⚠️ Complete Images mode needs a template + font; previewing the map only.")
 
-                if st.button("🔍 Generate Preview", key="generate_state_preview"):
+                if st.button("Generate Preview", key="generate_state_preview"):
                     with st.spinner(f"Rendering preview for {preview_state_choice}..."):
                         preview_abbrev = [ab for ab, name in us_states.items() if name == preview_state_choice][0]
                         match_bytes = _lookup.get(normalize_key(preview_state_choice)) or _lookup.get(normalize_key(preview_abbrev))
@@ -950,7 +1017,7 @@ with tab5:
         can_generate_states = use_local_state_images or state_images_zip is not None
 
         if use_state_template:
-            can_generate_states = can_generate_states and template_file and font_file
+            can_generate_states = can_generate_states and template_bytes and font_bytes
 
         if st.button("🗺️ Generate All State Maps", type="primary", key="generate_states", disabled=not can_generate_states):
             with st.spinner("Loading state images and generating outputs..."):
