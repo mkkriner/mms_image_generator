@@ -330,14 +330,15 @@ def build_county_overlay_image(state_counties_gdf, county_fips, highlight_color,
     return Image.open(buf).convert("RGBA")
 
 
-def composite_complete_image(template, font, overlay_img, text,
+def composite_complete_image(template, font, overlay_img, name_part, second_part,
                               overlay_x, overlay_y, overlay_max_w, overlay_max_h,
-                              overlay_zone_max_w, overlay_zone_max_h, oversized=False):
+                              overlay_zone_max_w, overlay_zone_max_h, one_line=False, oversized=False):
     """Composite one overlay + text onto the template — the exact same logic
     used inside the County and State Map Generators' batch loops. `oversized=True`
-    reproduces the Alaska 6x-from-center scaling. Shared by the batch generators
-    and their previews so a preview is always a true representation of the
-    final output."""
+    reproduces the Alaska 6x-from-center scaling. `one_line=True` draws
+    name_part and second_part side by side on a single row instead of
+    stacked. Shared by the batch generators and their previews so a preview
+    is always a true representation of the final output."""
     canvas = template.copy()
     draw = ImageDraw.Draw(canvas)
 
@@ -356,7 +357,7 @@ def composite_complete_image(template, font, overlay_img, text,
 
     overlay_resized = fit_into(overlay_img, box_w, box_h)
     paste_centered(canvas, overlay_resized, box_x, box_y_, box_w, box_h)
-    draw_text(draw, text, font)
+    draw_two_part_text(draw, name_part, second_part, font, one_line=one_line)
     return canvas
 
 
@@ -438,6 +439,48 @@ def draw_text(draw, custom_text, font, debug_label=None):
             draw_x = text_x - bbox[0]
         draw.text((draw_x, y_cursor), line, font=render_font, fill=color)
         y_cursor += line_height
+
+
+def _combine_two_part_text(name_part, second_part, one_line):
+    """Join the dynamic name portion and the static second-line portion used
+    by the County/State Map Generators into a single string — on one line
+    (space-joined) or two (newline-joined) — for auto-shrink sizing and for
+    the shrink-debug log."""
+    if not second_part:
+        return name_part
+    return f"{name_part} {second_part}" if one_line else f"{name_part}\n{second_part}"
+
+
+def draw_two_part_text(draw, name_part, second_part, font, one_line=False, debug_label=None):
+    """Draw the County/State Map Generator's two text parts — the dynamic
+    name (e.g. a state or county name) and the static second line (e.g.
+    "voices needed!"). When one_line is False, they stack as two lines via
+    draw_text (name in name_text_color_rgb, second part in
+    static_text_color_rgb). When one_line is True, they're placed side by
+    side on a single row instead, still in their respective colors, so the
+    two-tone look is preserved either way."""
+    combined = _combine_two_part_text(name_part, second_part, one_line)
+    if not combined:
+        return
+    if not one_line or not second_part:
+        draw_text(draw, combined, font, debug_label=debug_label)
+        return
+
+    render_font = get_render_font(draw, combined, debug_label=debug_label)
+    bbox = draw.textbbox((0, 0), combined, font=render_font)
+    combined_w = bbox[2] - bbox[0]
+    if auto_center_text:
+        draw_x = text_center_x - combined_w / 2 - bbox[0]
+    elif text_align == "center":
+        draw_x = text_x + (text_max_width - combined_w) / 2 - bbox[0]
+    elif text_align == "right":
+        draw_x = text_x + (text_max_width - combined_w) - bbox[0]
+    else:  # left
+        draw_x = text_x - bbox[0]
+
+    draw.text((draw_x, text_y), name_part, font=render_font, fill=name_text_color_rgb)
+    name_advance = draw.textlength(name_part + " ", font=render_font)
+    draw.text((draw_x + name_advance, text_y), second_part, font=render_font, fill=static_text_color_rgb)
 
 
 def make_color_transparent(img, target_color, threshold=50):
@@ -728,10 +771,15 @@ with tab4:
             st.warning("⚠️ Please upload a template image and font in the sidebar to use Complete Images mode.")
 
         county_second_line = "voices needed!"
+        county_one_line = False
         if use_template:
             county_second_line = st.text_input(
                 "Second Line Text", value="voices needed!", key="county_second_line_text",
                 help="Static text drawn below the county/parish/borough name, in the \"Remaining Lines Color\"."
+            )
+            county_one_line = st.checkbox(
+                "Combine onto one line", value=False, key="county_one_line",
+                help="Draws the county/parish/borough name and the second line text side by side on one row instead of stacked on two. Colors are preserved either way."
             )
 
         # ------------------------------------------------------------------
@@ -791,11 +839,12 @@ with tab4:
                                 subdivision = 'Parish'
                             else:
                                 subdivision = 'County'
-                            text = f"{preview_county_name} {subdivision}\n{county_second_line}"
+                            name_part = f"{preview_county_name} {subdivision}"
                             preview_canvas = composite_complete_image(
-                                template, font, map_img, text,
+                                template, font, map_img, name_part, county_second_line,
                                 overlay_x, overlay_y, overlay_max_w, overlay_max_h,
                                 overlay_zone_max_w, overlay_zone_max_h,
+                                one_line=county_one_line,
                                 oversized=(selected_state == 'AK')
                             )
                             st.session_state['county_preview_img'] = preview_canvas
@@ -856,17 +905,19 @@ with tab4:
                                 else:
                                     subdivision = 'County'
                                 
-                                # Two-line text: county/parish/borough name on
-                                # line 1 (drawn in the highlight color), the
-                                # user-editable second line on line 2 (drawn
-                                # in the secondary color) — matches the July
-                                # 2026 template.
-                                text = f"{county_name} {subdivision}\n{county_second_line}"
+                                # Name portion (drawn in the highlight color)
+                                # plus the user-editable second line (drawn
+                                # in the secondary color) — stacked on two
+                                # lines or combined onto one, per
+                                # "Combine onto one line" — matches the
+                                # July 2026 template.
+                                name_part = f"{county_name} {subdivision}"
 
                                 canvas = composite_complete_image(
-                                    template, font, county_map_img, text,
+                                    template, font, county_map_img, name_part, county_second_line,
                                     overlay_x, overlay_y, overlay_max_w, overlay_max_h,
                                     overlay_zone_max_w, overlay_zone_max_h,
+                                    one_line=county_one_line,
                                     oversized=(selected_state == 'AK')
                                 )
 
@@ -874,7 +925,7 @@ with tab4:
                                 # (composite_complete_image doesn't take a
                                 # debug_label, so log it directly here)
                                 draw_dummy = ImageDraw.Draw(Image.new("RGBA", (1, 1)))
-                                get_render_font(draw_dummy, text, debug_label=county_name)
+                                get_render_font(draw_dummy, _combine_two_part_text(name_part, county_second_line, county_one_line), debug_label=county_name)
 
                                 # Save the complete image, capped to ~490KB since
                                 # this is the full template-composited output
@@ -1042,10 +1093,15 @@ with tab5:
             st.warning("⚠️ Please upload a template image and font in the sidebar to use Complete Images mode.")
 
         state_second_line = "voices needed!"
+        state_one_line = False
         if use_state_template:
             state_second_line = st.text_input(
                 "Second Line Text", value="voices needed!", key="state_second_line_text",
                 help="Static text drawn below the state name, in the \"Remaining Lines Color\"."
+            )
+            state_one_line = st.checkbox(
+                "Combine onto one line", value=False, key="state_one_line",
+                help="Draws the state name and the second line text side by side on one row instead of stacked on two. Colors are preserved either way."
             )
 
         # ------------------------------------------------------------------
@@ -1112,11 +1168,11 @@ with tab5:
                             state_map_img_preview = recolor_visible_pixels(state_map_img_preview, state_recolor_rgb)
 
                         if use_state_template and template and font:
-                            text = f"{preview_state_choice}\n{state_second_line}"
                             preview_canvas = composite_complete_image(
-                                template, font, state_map_img_preview, text,
+                                template, font, state_map_img_preview, preview_state_choice, state_second_line,
                                 overlay_x, overlay_y, overlay_max_w, overlay_max_h,
                                 overlay_zone_max_w, overlay_zone_max_h,
+                                one_line=state_one_line,
                                 oversized=(preview_abbrev == 'AK')
                             )
                             st.session_state['state_preview_img'] = preview_canvas
@@ -1191,21 +1247,22 @@ with tab5:
 
                             # If using template mode, combine with template and text
                             if use_state_template:
-                                # Two-line text: state name on line 1 (highlight
-                                # color), the user-editable second line on
-                                # line 2 (secondary color) — matches the July
-                                # 2026 template.
-                                text = f"{state_full_name}\n{state_second_line}"
-
+                                # State name (drawn in the highlight color)
+                                # plus the user-editable second line (drawn
+                                # in the secondary color) — stacked on two
+                                # lines or combined onto one, per
+                                # "Combine onto one line" — matches the
+                                # July 2026 template.
                                 canvas = composite_complete_image(
-                                    template, font, state_map_img, text,
+                                    template, font, state_map_img, state_full_name, state_second_line,
                                     overlay_x, overlay_y, overlay_max_w, overlay_max_h,
                                     overlay_zone_max_w, overlay_zone_max_h,
+                                    one_line=state_one_line,
                                     oversized=(abbrev == 'AK')
                                 )
 
                                 draw_dummy = ImageDraw.Draw(Image.new("RGBA", (1, 1)))
-                                get_render_font(draw_dummy, text, debug_label=state_full_name)
+                                get_render_font(draw_dummy, _combine_two_part_text(state_full_name, state_second_line, state_one_line), debug_label=state_full_name)
 
                                 # Save the complete image, capped to ~490KB since
                                 # this is the full template-composited output
