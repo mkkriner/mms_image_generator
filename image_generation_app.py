@@ -727,6 +727,13 @@ with tab4:
         if use_template and not (template_bytes and font_bytes):
             st.warning("⚠️ Please upload a template image and font in the sidebar to use Complete Images mode.")
 
+        county_second_line = "voices needed!"
+        if use_template:
+            county_second_line = st.text_input(
+                "Second Line Text", value="voices needed!", key="county_second_line_text",
+                help="Static text drawn below the county/parish/borough name, in the \"Remaining Lines Color\"."
+            )
+
         # ------------------------------------------------------------------
         # Preview: let the user check one county's Complete Image (or map)
         # before committing to generating the whole state's batch. Reuses
@@ -784,7 +791,7 @@ with tab4:
                                 subdivision = 'Parish'
                             else:
                                 subdivision = 'County'
-                            text = f"{preview_county_name} {subdivision}\nvoices needed!"
+                            text = f"{preview_county_name} {subdivision}\n{county_second_line}"
                             preview_canvas = composite_complete_image(
                                 template, font, map_img, text,
                                 overlay_x, overlay_y, overlay_max_w, overlay_max_h,
@@ -850,10 +857,11 @@ with tab4:
                                     subdivision = 'County'
                                 
                                 # Two-line text: county/parish/borough name on
-                                # line 1 (drawn in the highlight color), static
-                                # "voices needed!" on line 2 (drawn in the
-                                # secondary color) — matches the July 2026 template.
-                                text = f"{county_name} {subdivision}\nvoices needed!"
+                                # line 1 (drawn in the highlight color), the
+                                # user-editable second line on line 2 (drawn
+                                # in the secondary color) — matches the July
+                                # 2026 template.
+                                text = f"{county_name} {subdivision}\n{county_second_line}"
 
                                 canvas = composite_complete_image(
                                     template, font, county_map_img, text,
@@ -1033,6 +1041,13 @@ with tab5:
         if use_state_template and not (template_bytes and font_bytes):
             st.warning("⚠️ Please upload a template image and font in the sidebar to use Complete Images mode.")
 
+        state_second_line = "voices needed!"
+        if use_state_template:
+            state_second_line = st.text_input(
+                "Second Line Text", value="voices needed!", key="state_second_line_text",
+                help="Static text drawn below the state name, in the \"Remaining Lines Color\"."
+            )
+
         # ------------------------------------------------------------------
         # Preview: let the user check one state's Complete Image (or map)
         # before committing to generating all 50 + DC. Reuses
@@ -1097,7 +1112,7 @@ with tab5:
                             state_map_img_preview = recolor_visible_pixels(state_map_img_preview, state_recolor_rgb)
 
                         if use_state_template and template and font:
-                            text = f"{preview_state_choice}\nvoices needed!"
+                            text = f"{preview_state_choice}\n{state_second_line}"
                             preview_canvas = composite_complete_image(
                                 template, font, state_map_img_preview, text,
                                 overlay_x, overlay_y, overlay_max_w, overlay_max_h,
@@ -1177,9 +1192,10 @@ with tab5:
                             # If using template mode, combine with template and text
                             if use_state_template:
                                 # Two-line text: state name on line 1 (highlight
-                                # color), static "voices needed!" on line 2
-                                # (secondary color) — matches the July 2026 template.
-                                text = f"{state_full_name}\nvoices needed!"
+                                # color), the user-editable second line on
+                                # line 2 (secondary color) — matches the July
+                                # 2026 template.
+                                text = f"{state_full_name}\n{state_second_line}"
 
                                 canvas = composite_complete_image(
                                     template, font, state_map_img, text,
