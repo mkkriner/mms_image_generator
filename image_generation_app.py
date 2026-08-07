@@ -14,6 +14,8 @@ import matplotlib.pyplot as plt
 import matplotlib
 matplotlib.use('Agg')  # Use non-interactive backend
 import os
+import hashlib
+import json
 
 # Page config
 st.set_page_config(page_title="Custom Image Generator", layout="wide")
@@ -23,6 +25,45 @@ st.write("Generate custom images by combining a template with overlays and text.
 
 logo = Image.open("static/logo_white.png").resize((166,252))
 st.sidebar.image(logo)
+
+# --- Per-template layout presets --------------------------------------------
+# Saved to a local JSON file, keyed by a hash of the template's bytes, so the
+# overlay/text position & size settings tuned for a given template are
+# remembered and auto-loaded the next time that same template is selected or
+# uploaded again.
+PRESETS_FILE = 'template_layouts.json'
+
+LAYOUT_FIELDS = [
+    "overlay_x", "overlay_y", "overlay_max_w", "overlay_max_h",
+    "overlay_auto_trim", "overlay_zone_max_w", "overlay_zone_max_h",
+    "font_size", "auto_center_text", "text_center_x", "text_x", "text_y",
+    "text_spacing", "text_align", "auto_shrink_text", "text_max_width",
+    "text_min_font_size", "name_text_color", "static_text_color",
+]
+
+
+def load_presets():
+    if os.path.exists(PRESETS_FILE):
+        try:
+            with open(PRESETS_FILE, 'r') as f:
+                return json.load(f)
+        except (json.JSONDecodeError, OSError):
+            return {}
+    return {}
+
+
+def save_preset(template_hash, template_name, values):
+    presets = load_presets()
+    presets[template_hash] = {"template_name": template_name, **values}
+    with open(PRESETS_FILE, 'w') as f:
+        json.dump(presets, f, indent=2)
+
+
+def delete_preset(template_hash):
+    presets = load_presets()
+    presets.pop(template_hash, None)
+    with open(PRESETS_FILE, 'w') as f:
+        json.dump(presets, f, indent=2)
 
 
 # File uploaders
@@ -43,6 +84,7 @@ if use_local_templates:
     ])
 
 template_bytes = None
+template_display_name = None
 if template_options:
     template_source_mode = st.sidebar.radio(
         "Template source", ["Choose from library", "Upload custom"],
@@ -52,21 +94,51 @@ if template_options:
         chosen_template_name = st.sidebar.selectbox("Template", template_options, key="template_select")
         with open(os.path.join(local_templates_dir, chosen_template_name), 'rb') as f:
             template_bytes = f.read()
+        template_display_name = chosen_template_name
     else:
         _uploaded_template = st.sidebar.file_uploader("Upload Template Image", type=['png', 'jpg', 'jpeg'])
         if _uploaded_template:
             template_bytes = _uploaded_template.getvalue()
+            template_display_name = _uploaded_template.name
 else:
     if use_local_templates:
         st.sidebar.caption("No images found in 'templates' folder — upload one instead.")
     _uploaded_template = st.sidebar.file_uploader("Upload Template Image", type=['png', 'jpg', 'jpeg'])
     if _uploaded_template:
         template_bytes = _uploaded_template.getvalue()
+        template_display_name = _uploaded_template.name
 
+# Look up (or fall back to defaults for) this template's saved layout before
+# the config widgets below are created. Widget keys are suffixed by the
+# template's hash so each template gets its own independent set of
+# remembered values in Streamlit's session state — switching templates swaps
+# in that template's saved layout instead of leaving the previous one's
+# numbers in place.
+template_hash = None
+saved_layout = {}
 if template_bytes:
+    template_hash = hashlib.sha256(template_bytes).hexdigest()
+    saved_layout = load_presets().get(template_hash, {})
+
     _template_preview = Image.open(io.BytesIO(template_bytes))
     st.sidebar.caption(f"📐 Template size: {_template_preview.width} × {_template_preview.height} px",
                         help="Set text_max_width to roughly the width of the template minus 100-150px.")
+
+    if saved_layout:
+        st.sidebar.success(f"✅ Saved layout loaded for '{saved_layout.get('template_name', template_display_name)}'")
+        if st.sidebar.button("🗑️ Forget this layout", key="forget_layout_btn"):
+            delete_preset(template_hash)
+            for _field in LAYOUT_FIELDS:
+                st.session_state.pop(f"{_field}_{template_hash}", None)
+            st.rerun()
+    else:
+        st.sidebar.info("ℹ️ No saved layout for this template yet — tune the settings below, then save them.")
+
+_key_suffix = template_hash or "default"
+
+
+def pref(name, default):
+    return saved_layout.get(name, default)
 
 # ----------------------------------------------------------------------
 # Font selection: same local-folder-first pattern, reading from 'fonts/'
@@ -103,54 +175,80 @@ overlay_files = st.sidebar.file_uploader("Upload Overlay Images", type=['png', '
 
 # Configuration inputs
 st.sidebar.header("Overlay Configuration")
-overlay_x = st.sidebar.number_input("Overlay X Position", value=2072, help="Horizontal position of the overlay box (top-left corner); matches the top-right badge area on the July 2026 template")
-overlay_y = st.sidebar.number_input("Overlay Y Position", value=40, help="Vertical position of the overlay box (top-left corner)")
-overlay_max_w = st.sidebar.number_input("Overlay Max Width", value=880, help="Maximum width the overlay can be")
-overlay_max_h = st.sidebar.number_input("Overlay Max Height", value=720, help="Maximum height the overlay can be")
-overlay_auto_trim = st.sidebar.checkbox("Auto-trim transparent padding on overlay", value=True,
+overlay_x = st.sidebar.number_input("Overlay X Position", value=pref("overlay_x", 2072), key=f"overlay_x_{_key_suffix}", help="Horizontal position of the overlay box (top-left corner); matches the top-right badge area on the July 2026 template")
+overlay_y = st.sidebar.number_input("Overlay Y Position", value=pref("overlay_y", 40), key=f"overlay_y_{_key_suffix}", help="Vertical position of the overlay box (top-left corner)")
+overlay_max_w = st.sidebar.number_input("Overlay Max Width", value=pref("overlay_max_w", 880), key=f"overlay_max_w_{_key_suffix}", help="Maximum width the overlay can be")
+overlay_max_h = st.sidebar.number_input("Overlay Max Height", value=pref("overlay_max_h", 720), key=f"overlay_max_h_{_key_suffix}", help="Maximum height the overlay can be")
+overlay_auto_trim = st.sidebar.checkbox("Auto-trim transparent padding on overlay", value=pref("overlay_auto_trim", True),
+                                         key=f"overlay_auto_trim_{_key_suffix}",
                                          help="Crops each overlay to its visible content before fitting it into the box above. Fixes overlays looking smaller than others when the source image has extra transparent margin (common with state shape PNGs).")
 overlay_zone_max_w = st.sidebar.number_input(
-    "Oversized-Shape Zone Max Width", value=1400,
+    "Oversized-Shape Zone Max Width", value=pref("overlay_zone_max_w", 1400), key=f"overlay_zone_max_w_{_key_suffix}",
     help="Caps how wide an oversized shape (e.g. Alaska, scaled up below) is allowed to grow, so it never overflows the canvas or the text area. The shape stays centered on the normal overlay box."
 )
 overlay_zone_max_h = st.sidebar.number_input(
-    "Oversized-Shape Zone Max Height", value=900,
+    "Oversized-Shape Zone Max Height", value=pref("overlay_zone_max_h", 900), key=f"overlay_zone_max_h_{_key_suffix}",
     help="Caps how tall an oversized shape (e.g. Alaska, scaled up below) is allowed to grow, so it never overflows the canvas."
 )
 
 st.sidebar.header("Text Configuration")
-font_size = st.sidebar.slider("Font Size", 100, 400, 265)
-auto_center_text = st.sidebar.checkbox("Auto-center text horizontally", value=False,
+font_size = st.sidebar.slider("Font Size", 100, 400, pref("font_size", 265), key=f"font_size_{_key_suffix}")
+auto_center_text = st.sidebar.checkbox("Auto-center text horizontally", value=pref("auto_center_text", False),
+                                        key=f"auto_center_text_{_key_suffix}",
                                         help="Recentres the text based on its actual rendered width, so it stays centered no matter how long the text is (e.g. 'Alabama' vs 'California'). The July 2026 template is left-aligned, so this defaults off.")
-text_center_x = st.sidebar.number_input("Text Center X (used when auto-center is on)", value=1590,
+text_center_x = st.sidebar.number_input("Text Center X (used when auto-center is on)", value=pref("text_center_x", 1590),
+                                         key=f"text_center_x_{_key_suffix}",
                                          help="The horizontal point the text should be centered around.")
-text_x = st.sidebar.number_input("Text X Position (left edge)", value=230, help="Horizontal position of the text")
-text_y = st.sidebar.number_input("Text Y Position (top of first line)", value=930, help="Vertical position of the text")
-text_spacing = st.sidebar.slider("Extra Line Spacing", 0, 50, 0,
+text_x = st.sidebar.number_input("Text X Position (left edge)", value=pref("text_x", 230), key=f"text_x_{_key_suffix}", help="Horizontal position of the text")
+text_y = st.sidebar.number_input("Text Y Position (top of first line)", value=pref("text_y", 930), key=f"text_y_{_key_suffix}", help="Vertical position of the text")
+text_spacing = st.sidebar.slider("Extra Line Spacing", 0, 50, pref("text_spacing", 0), key=f"text_spacing_{_key_suffix}",
                                   help="Extra pixels added on top of the font's natural line height between lines.")
-text_align = st.sidebar.selectbox("Text Alignment", ["left", "center", "right"], index=0,
+_align_options = ["left", "center", "right"]
+text_align = st.sidebar.selectbox("Text Alignment", _align_options, index=_align_options.index(pref("text_align", "left")),
+                                   key=f"text_align_{_key_suffix}",
                                    help="How each line is aligned within Text Max Width when auto-center is off.")
-auto_shrink_text = st.sidebar.checkbox("Auto-shrink font to fit width", value=True,
+auto_shrink_text = st.sidebar.checkbox("Auto-shrink font to fit width", value=pref("auto_shrink_text", True),
+                                        key=f"auto_shrink_text_{_key_suffix}",
                                         help="If a line of text (e.g. a long county name) would render wider than the max width below, the font size is automatically reduced until it fits.")
-text_max_width = st.sidebar.number_input("Text Max Width (px)", value=1750,
+text_max_width = st.sidebar.number_input("Text Max Width (px)", value=pref("text_max_width", 1750),
+                                          key=f"text_max_width_{_key_suffix}",
                                           help="Maximum allowed rendered text width before auto-shrink kicks in. On the July 2026 template, keep this narrow enough that text doesn't run into the state/county badge in the top-right corner.")
-text_min_font_size = st.sidebar.number_input("Minimum Font Size (auto-shrink floor)", value=100,
+text_min_font_size = st.sidebar.number_input("Minimum Font Size (auto-shrink floor)", value=pref("text_min_font_size", 100),
+                                              key=f"text_min_font_size_{_key_suffix}",
                                               help="Font will never shrink below this size, even if the text still doesn't fully fit.")
 
 # Colors: the July 2026 template uses two text colors — one for the first line
 # (the dynamic state/county name) and one for the remaining static line(s)
 # (e.g. "voices needed!"), matching the teal/blue two-tone look in the example.
 name_text_color = st.sidebar.color_picker(
-    "First Line Color (state/county name)", "#31BAEC",
+    "First Line Color (state/county name)", pref("name_text_color", "#31BAEC"),
+    key=f"name_text_color_{_key_suffix}",
     help="Color for the first line of text — typically the dynamic state or county name."
 )
 name_text_color_rgb = tuple(int(name_text_color.lstrip('#')[i:i+2], 16) for i in (0, 2, 4))
 
 static_text_color = st.sidebar.color_picker(
-    "Remaining Lines Color (e.g. 'voices needed!')", "#FFFFFF",
+    "Remaining Lines Color (e.g. 'voices needed!')", pref("static_text_color", "#FFFFFF"),
+    key=f"static_text_color_{_key_suffix}",
     help="Color for any additional lines of text after the first."
 )
 static_text_color_rgb = tuple(int(static_text_color.lstrip('#')[i:i+2], 16) for i in (0, 2, 4))
+
+if template_bytes:
+    if st.sidebar.button("💾 Save current values as this template's layout", key="save_layout_btn"):
+        save_preset(template_hash, template_display_name, {
+            "overlay_x": overlay_x, "overlay_y": overlay_y,
+            "overlay_max_w": overlay_max_w, "overlay_max_h": overlay_max_h,
+            "overlay_auto_trim": overlay_auto_trim,
+            "overlay_zone_max_w": overlay_zone_max_w, "overlay_zone_max_h": overlay_zone_max_h,
+            "font_size": font_size, "auto_center_text": auto_center_text,
+            "text_center_x": text_center_x, "text_x": text_x, "text_y": text_y,
+            "text_spacing": text_spacing, "text_align": text_align,
+            "auto_shrink_text": auto_shrink_text, "text_max_width": text_max_width,
+            "text_min_font_size": text_min_font_size,
+            "name_text_color": name_text_color, "static_text_color": static_text_color,
+        })
+        st.sidebar.success(f"Layout saved for '{template_display_name}'!")
 
 
 def trim_transparent(img):
